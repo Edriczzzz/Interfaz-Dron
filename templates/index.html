@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini Mission Planner (Web)</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+  <!-- Plotly (gráfica SDR) -->
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>GCS Web (tipo Mission Planner)</h1>
+    <div class="status" id="connStatus">Conectando…</div>
+  </header>
+
+  <main class="grid">
+    <section class="card map">
+      <h2>Mapa</h2>
+      <div id="map"></div>
+
+      <div class="row">
+        <input id="latInput" placeholder="Latitud" />
+        <input id="lonInput" placeholder="Longitud" />
+        <button id="gotoBtn">Ir a coordenadas</button>
+      </div>
+    </section>
+
+    <section class="card telem">
+      <h2>Telemetría</h2>
+      <div class="kv"><span>Modo</span><b id="mode">—</b></div>
+      <div class="kv"><span>Armado</span><b id="armed">—</b></div>
+      <div class="kv"><span>Batería</span><b id="battery">—</b></div>
+      <div class="kv"><span>Lat</span><b id="lat">—</b></div>
+      <div class="kv"><span>Lon</span><b id="lon">—</b></div>
+      <div class="kv"><span>Alt (m)</span><b id="alt">—</b></div>
+      <div class="kv"><span>Vel (m/s)</span><b id="gs">—</b></div>
+      <div class="kv"><span>GPS fix</span><b id="fix">—</b></div>
+      <div class="kv"><span>Sats</span><b id="sats">—</b></div>
+
+      <h3>Modos de vuelo</h3>
+      <div class="btns">
+        <button class="modeBtn" data-mode="STABILIZE">STABILIZE</button>
+        <button class="modeBtn" data-mode="ALT_HOLD">ALT_HOLD</button>
+        <button class="modeBtn" data-mode="LOITER">LOITER</button>
+        <button class="modeBtn" data-mode="AUTO">AUTO</button>
+        <button class="modeBtn" data-mode="RTL">RTL</button>
+      </div>
+
+      <h3>Armado</h3>
+      <div class="btns">
+        <button id="armBtn">ARM</button>
+        <button id="disarmBtn">DISARM</button>
+      </div>
+    </section>
+
+    <section class="card sdr">
+      <h2>SDR (tiempo real)</h2>
+      <div id="sdrPlot"></div>
+    </section>
+  </main>
+
+  <!-- Socket.IO -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+  <!-- Leaflet -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="/static/main.js"></script>
+</body>
+</html>
