@@ -59,6 +59,17 @@
       </div>
     </section>
 
+    <section class="card attitude">
+  <h2>Actitud (Yaw / Pitch / Roll)</h2>
+  <div id="attitude3d"></div>
+  <div class="angles">
+    <span>Yaw: <b id="yaw">0</b>°</span>
+    <span>Pitch: <b id="pitch">0</b>°</span>
+    <span>Roll: <b id="roll">0</b>°</span>
+  </div>
+</section>
+
+
     <section class="card sdr">
       <h2>SDR (tiempo real)</h2>
       <div id="sdrPlot"></div>
@@ -70,6 +81,7 @@
 
   <!-- Leaflet -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
   <script src="/static/main.js"></script>
 </body>

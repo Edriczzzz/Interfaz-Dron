@@ -1,164 +1,145 @@
 import time
 import threading
-import random
-from flask import Flask, render_template, request, jsonify
+import serial
+from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 
-# MAVLink
-from pymavlink import mavutil
+# =============================
+# CONFIG
+# =============================
+SERIAL_PORT = "COM15"
+SERIAL_BAUD = 9600
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "dev"
-socketio = SocketIO(app, cors_allowed_origins="*")
 
-# -----------------------------
-# Config: Pixhawk connection
-# -----------------------------
-# Ejemplos:
-#   USB:   "COM5" (Windows) o "/dev/ttyACM0" (Linux)
-#   TELEM: "/dev/ttyUSB0"
-#   UDP SITL: "udp:127.0.0.1:14550"
-MAVLINK_ENDPOINT = "udp:127.0.0.1:14550"  # Cambia a tu puerto real
-mav = None
-mav_connected = False
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading"
+)
 
-# Estado cacheado para mandar a la web
+# =============================
+# STATE GLOBAL
+# =============================
 state = {
-    "lat": 19.4326,
-    "lon": -99.1332,
+    "lat": 0.0,
+    "lon": 0.0,
     "alt": 0.0,
-    "groundspeed": 0.0,
-    "battery": 100,
+    "battery": 0,
+    "battery_v": 0.0,
+    "fix": 0,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "roll": 0.0,
     "mode": "UNKNOWN",
-    "armed": False,
-    "fix_type": 0,
-    "satellites": 0,
+    "armed": False
 }
 
-def connect_mavlink():
-    global mav, mav_connected
+state_lock = threading.Lock()
+
+# =============================
+# SERIAL READER (DATOS REALES)
+# =============================
+def serial_reader():
+    global state
+
     try:
-        mav = mavutil.mavlink_connection(MAVLINK_ENDPOINT, autoreconnect=True)
-        mav.wait_heartbeat(timeout=10)
-        mav_connected = True
-        print("✅ MAVLink conectado. Heartbeat OK.")
-    except Exception as e:
-        mav_connected = False
-        print("❌ No se pudo conectar MAVLink:", e)
+        ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=1)
+        print("✅ Serial conectado")
 
-def mavlink_reader():
-    """Lee mensajes MAVLink y actualiza state + emite a la web."""
-    global mav, mav_connected
-
-    while True:
-        if not mav_connected or mav is None:
-            connect_mavlink()
-            time.sleep(1)
-            continue
-
-        try:
-            msg = mav.recv_match(blocking=True, timeout=1)
-            if msg is None:
+        while True:
+            line = ser.readline().decode("utf-8", errors="ignore").strip()
+            if not line:
                 continue
 
-            mtype = msg.get_type()
+            print("📥 RX:", line)
 
-            if mtype == "GLOBAL_POSITION_INT":
-                state["lat"] = msg.lat / 1e7
-                state["lon"] = msg.lon / 1e7
-                state["alt"] = msg.relative_alt / 1000.0  # mm -> m
+            # RX > GPS:lat,lon|ALT:x|ATT:y,p,r|BAT:v,%|FIX:n|MODE:x
+            try:
+                payload = line.split("RX >")[1].strip()
+                fields = payload.split("|")
 
-            elif mtype == "VFR_HUD":
-                state["groundspeed"] = float(msg.groundspeed)
+                with state_lock:
+                    for f in fields:
+                        if f.startswith("GPS:"):
+                            lat, lon = f.replace("GPS:", "").split(",")
+                            state["lat"] = float(lat)
+                            state["lon"] = float(lon)
 
-            elif mtype == "SYS_STATUS":
-                # battery_remaining es %
-                if msg.battery_remaining != -1:
-                    state["battery"] = int(msg.battery_remaining)
+                        elif f.startswith("ALT:"):
+                            state["alt"] = float(f.replace("ALT:", ""))
 
-            elif mtype == "HEARTBEAT":
-                # modo y armado
-                state["mode"] = mavutil.mode_string_v10(msg)
-                state["armed"] = (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
+                        elif f.startswith("ATT:"):
+                            yaw, pitch, roll = f.replace("ATT:", "").split(",")
+                            state["yaw"] = float(yaw)
+                            state["pitch"] = float(pitch)
+                            state["roll"] = float(roll)
 
-            elif mtype == "GPS_RAW_INT":
-                state["fix_type"] = int(msg.fix_type)
-                state["satellites"] = int(msg.satellites_visible)
+                        elif f.startswith("BAT:"):
+                            v, pct = f.replace("BAT:", "").split(",")
+                            state["battery_v"] = float(v.replace("V", ""))
+                            state["battery"] = int(pct.replace("%", ""))
 
-            # Emitir a todos los clientes conectados
-            socketio.emit("telemetry", state)
+                        elif f.startswith("FIX:"):
+                            state["fix"] = int(f.replace("FIX:", ""))
 
-        except Exception as e:
-            print("⚠️ Error leyendo MAVLink:", e)
-            mav_connected = False
-            time.sleep(1)
+                        elif f.startswith("MODE:"):
+                            state["mode"] = f.replace("MODE:", "")
 
-def sdr_stream_simulated():
-    """Simula datos SDR en tiempo real (cámbialo por tu lectura real)."""
-    t = 0
+            except Exception as e:
+                print("⚠️ Parse error:", e)
+
+    except Exception as e:
+        print("⚠️ Serial error:", e)
+
+# =============================
+# TELEMETRY PUBLISHER (20 Hz)
+# =============================
+def telemetry_publisher():
     while True:
-        # Ejemplo: señal + ruido
-        t += 1
-        sample = {
+        with state_lock:
+            socketio.emit("telemetry", state)
+        time.sleep(0.05)  # 20 Hz reales
+
+# =============================
+# SDR SIMULADO (por ahora)
+# =============================
+def sdr_publisher():
+    import math
+    t = 0.0
+    while True:
+        t += 0.1
+        value = math.sin(t) + (math.sin(t * 3) * 0.3)
+
+        socketio.emit("sdr", {
             "t": time.time(),
-            "value": (random.random() - 0.5) * 0.3 + 0.8 * (1 if (t % 30) < 15 else 0)
-        }
-        socketio.emit("sdr", sample)
-        time.sleep(0.05)  # 20 Hz
+            "value": value
+        })
+        time.sleep(0.05)
 
-def set_mode(mode_str: str):
-    """Cambia modo usando pymavlink."""
-    if not mav_connected:
-        return False, "MAVLink no conectado"
-
-    mode_mapping = mav.mode_mapping()
-    if mode_str not in mode_mapping:
-        return False, f"Modo no válido para este firmware: {mode_str}"
-
-    mode_id = mode_mapping[mode_str]
-    mav.mav.set_mode_send(
-        mav.target_system,
-        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-        mode_id
-    )
-    return True, "OK"
-
+# =============================
+# FLASK
+# =============================
 @app.route("/")
 def index():
     return render_template("index.html")
-
-@app.route("/api/command/mode", methods=["POST"])
-def api_set_mode():
-    data = request.get_json(force=True)
-    mode = data.get("mode", "")
-    ok, msg = set_mode(mode)
-    return jsonify({"ok": ok, "message": msg})
-
-# Opcional: ARM/DISARM
-@app.route("/api/command/arm", methods=["POST"])
-def api_arm():
-    if not mav_connected:
-        return jsonify({"ok": False, "message": "MAVLink no conectado"})
-    data = request.get_json(force=True)
-    arm = bool(data.get("arm", True))
-
-    mav.mav.command_long_send(
-        mav.target_system,
-        mav.target_component,
-        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-        0,
-        1.0 if arm else 0.0, 0, 0, 0, 0, 0, 0
-    )
-    return jsonify({"ok": True, "message": "OK"})
 
 @socketio.on("connect")
 def on_connect():
     emit("telemetry", state)
 
-def start_threads():
-    threading.Thread(target=mavlink_reader, daemon=True).start()
-    threading.Thread(target=sdr_stream_simulated, daemon=True).start()
-
+# =============================
+# MAIN
+# =============================
 if __name__ == "__main__":
-    start_threads()
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+    threading.Thread(target=serial_reader, daemon=True).start()
+    threading.Thread(target=telemetry_publisher, daemon=True).start()
+    threading.Thread(target=sdr_publisher, daemon=True).start()
+
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=5000,
+        debug=False
+    )
